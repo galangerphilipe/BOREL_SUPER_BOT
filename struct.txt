@@ -1,0 +1,47 @@
+# Instructions d'installation et d'utilisation
+
+"""
+1. Installation des dépendances:
+pip install -r requirements.txt
+
+2. Configuration:
+- Créer un fichier .env avec:
+  BOT_TOKEN=votre_token_bot_telegram
+
+3. Structure des dossiers à créer:
+- data/
+- media/welcome/
+- media/tutorials/
+- media/games/crash/
+- media/games/wheel/positions/
+
+4. Ajouter les images:
+- media/games/crash/crash_base.png (image de base pour le crash)
+- media/games/wheel/wheel_default.png (roue par défaut)
+- media/games/wheel/positions/ (plusieurs images de roue dans différentes positions)
+
+5. Lancement:
+python main.py
+
+6. Ajouter un nouveau jeu:
+- Créer un dossier dans games/
+- Hériter de BaseGame
+- Ajouter dans GameManager.games
+- Implémenter les méthodes requises
+
+7. Fonctionnalités principales:
+- Vérification automatique des groupes
+- Système de parrainage complet
+- Gestion des cooldowns
+- Navigation modulaire
+- Traitement d'images
+- Multilangue
+- Base de données JSON
+- Architecture modulaire
+
+Cette structure permet:
+- Ajout facile de nouveaux jeux
+- Réutilisation du code
+- Maintenance simplifiée
+- Extensibilité
+- Composants séparés et testables
