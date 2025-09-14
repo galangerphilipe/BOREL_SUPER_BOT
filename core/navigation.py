@@ -20,7 +20,8 @@ class Navigation:
         """Afficher la sélection de langue"""
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Français 🇫🇷", callback_data="fr"),
-             InlineKeyboardButton("English 🇬🇧", callback_data="en")]
+             InlineKeyboardButton("English 🇬🇧", callback_data="en"),
+             InlineKeyboardButton("العربية 🇲🇦", callback_data="ar")]
         ])
         
         if update.callback_query:

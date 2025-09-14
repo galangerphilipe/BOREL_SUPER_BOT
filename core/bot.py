@@ -33,7 +33,7 @@ class TelegramBot:
         # Callbacks pour la navigation
         self.application.add_handler(CallbackQueryHandler(
             self.navigation.handle_language_selection, 
-            pattern="^(fr|en)$"
+            pattern="^(fr|en|ar)$"
         ))
         
         self.application.add_handler(CallbackQueryHandler(
@@ -134,11 +134,6 @@ class TelegramBot:
         self.application.add_handler(CallbackQueryHandler(
             self.coupon_system.start_coupon_creation,
             pattern="^create_coupon$"
-        ))
-        # Handler pour la création de coupon
-        self.application.add_handler(CallbackQueryHandler(
-            self.coupon_system.start_announcement_creation,
-            pattern="^create_announcement$"
         ))
         
         # Handler pour les coupons (image avec légende)
