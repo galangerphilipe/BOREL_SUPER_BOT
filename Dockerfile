@@ -15,8 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copier le reste des fichiers de l'application
 COPY . .
 
-# Exposer le port pour le serveur Flask
-EXPOSE 8090
 
 # Commande pour démarrer le bot
 CMD ["python", "main.py"]
