@@ -4,6 +4,8 @@ from telegram.error import TelegramError, Forbidden, BadRequest
 import os
 import asyncio
 import logging
+from PIL import Image
+import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +21,75 @@ class CouponSend:
         self.batch_delay = 1.0  # Délai entre les batches en secondes
         self.send_delay = 0.03  # Délai minimal entre les envois individuels
         self.max_retries = 2  # Nombre de tentatives maximum
+        
+        # Limites Telegram
+        self.MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50 MB
+        self.MAX_PHOTO_SIZE = 10 * 1024 * 1024  # 10 MB
+        
+        # Formats supportés
+        self.SUPPORTED_VIDEO_FORMATS = ['.mp4', '.avi', '.mov', '.mkv', '.webm']
+        self.SUPPORTED_PHOTO_FORMATS = ['.jpg', '.jpeg', '.png', '.webp']
 
     def _load_texts(self):
         # Cette fonction doit charger tes textes multilingues (à adapter si besoin)
         from utils.helpers import load_texts
         return load_texts()
+
+    def _get_video_info(self, video_path):
+        """Extraire les informations d'une vidéo (durée, dimensions)"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None
+            
+            # Obtenir les propriétés de la vidéo
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            duration = int(frame_count / fps) if fps > 0 else 0
+            
+            cap.release()
+            
+            return {
+                'duration': duration,
+                'width': width,
+                'height': height
+            }
+        except Exception as e:
+            logger.error(f"Erreur lors de l'extraction des infos vidéo: {e}")
+            return None
+
+    def _generate_video_thumbnail(self, video_path):
+        """Générer une miniature pour la vidéo"""
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return None
+            
+            # Lire la première frame
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                return None
+            
+            # Convertir BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Créer une miniature
+            thumbnail = Image.fromarray(frame_rgb)
+            thumbnail.thumbnail((320, 240), Image.Resampling.LANCZOS)
+            
+            # Sauvegarder la miniature
+            thumbnail_path = video_path.replace('.mp4', '_thumb.jpg')
+            thumbnail.save(thumbnail_path, 'JPEG', quality=80)
+            
+            return thumbnail_path
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération de miniature: {e}")
+            return None
 
     async def start_coupon_creation(self, update, context):
         """Lancer la création de coupon par l'admin"""
@@ -35,7 +101,12 @@ class CouponSend:
         self.database.update_user(user_id, {'waiting_for_coupon': True})
 
         await update.callback_query.message.reply_text(
-            self.texts['fr']['send_coupon_prompt']
+            self.texts['fr']['send_coupon_prompt'] + 
+            "\n\n📝 **Formats supportés:**\n" +
+            "🖼️ Images: JPG, PNG, WEBP (max 10MB)\n" +
+            "🎥 Vidéos: MP4, AVI, MOV, MKV, WEBM (max 50MB)\n" +
+            "📄 Texte: Messages texte simples",
+            parse_mode="Markdown"
         )
         await update.callback_query.answer()
 
@@ -53,21 +124,63 @@ class CouponSend:
         media_type = None
         file_id = None
         file_path = None
+        file_size = 0
 
         if message.photo:
             media_type = "photo"
-            file_id = message.photo[1].file_id  # Prendre la plus haute résolution
+            file_id = message.photo[-1].file_id  # Prendre la plus haute résolution
+            file_size = message.photo[-1].file_size or 0
         elif message.video:
-            media_type = "video" 
+            media_type = "video"
             file_id = message.video.file_id
+            file_size = message.video.file_size or 0
+        elif message.document and message.document.mime_type:
+            # Vérifier si c'est une vidéo envoyée comme document
+            mime_type = message.document.mime_type.lower()
+            if mime_type.startswith('video/'):
+                media_type = "video"
+                file_id = message.document.file_id
+                file_size = message.document.file_size or 0
+            elif mime_type.startswith('image/'):
+                media_type = "photo"
+                file_id = message.document.file_id
+                file_size = message.document.file_size or 0
         elif message.text or message.caption:
             media_type = "text"
         else:
-            await message.reply_text(self.texts['fr']['invalid_coupon'])
+            await message.reply_text(
+                "❌ **Format non supporté**\n\n" +
+                "Formats acceptés:\n" +
+                "🖼️ Images: JPG, PNG, WEBP\n" +
+                "🎥 Vidéos: MP4, AVI, MOV, MKV, WEBM\n" +
+                "📄 Texte simple",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Vérifier la taille du fichier
+        if media_type == "photo" and file_size > self.MAX_PHOTO_SIZE:
+            await message.reply_text(
+                f"❌ **Image trop volumineuse**\n\n" +
+                f"Taille actuelle: {file_size/1024/1024:.1f} MB\n" +
+                f"Limite: {self.MAX_PHOTO_SIZE/1024/1024:.0f} MB",
+                parse_mode="Markdown"
+            )
+            return
+        elif media_type == "video" and file_size > self.MAX_VIDEO_SIZE:
+            await message.reply_text(
+                f"❌ **Vidéo trop volumineuse**\n\n" +
+                f"Taille actuelle: {file_size/1024/1024:.1f} MB\n" +
+                f"Limite: {self.MAX_VIDEO_SIZE/1024/1024:.0f} MB",
+                parse_mode="Markdown"
+            )
             return
 
         try:
             # Télécharger le fichier média si c'est une image ou vidéo
+            video_info = None
+            thumbnail_path = None
+            
             if media_type in ["photo", "video"]:
                 tg_file: File = await context.bot.get_file(file_id)
                 
@@ -80,7 +193,31 @@ class CouponSend:
                     file_name = f"coupon_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}{file_extension}"
                 
                 file_path = os.path.join(self.media_path, file_name)
+                
+                # Message de progression pour les gros fichiers
+                if file_size > 5 * 1024 * 1024:  # > 5MB
+                    progress_msg = await message.reply_text(
+                        f"⬇️ **Téléchargement en cours...**\n" +
+                        f"Fichier: {file_size/1024/1024:.1f} MB",
+                        parse_mode="Markdown"
+                    )
+                
                 await tg_file.download_to_drive(custom_path=file_path)
+                
+                # Supprimer le message de progression
+                if file_size > 5 * 1024 * 1024:
+                    try:
+                        await progress_msg.delete()
+                    except:
+                        pass
+                
+                # Pour les vidéos, extraire les informations et générer une miniature
+                if media_type == "video":
+                    video_info = self._get_video_info(file_path)
+                    thumbnail_path = self._generate_video_thumbnail(file_path)
+                    
+                    if not video_info:
+                        logger.warning(f"Impossible d'extraire les infos de la vidéo: {file_path}")
 
             coupon_data = {
                 'coupon_id': f"coupon_{datetime.now().isoformat()}",
@@ -88,6 +225,11 @@ class CouponSend:
                 'media_type': media_type,
                 'photo_path': file_path if media_type == "photo" else None,
                 'video_path': file_path if media_type == "video" else None,
+                'video_duration': video_info['duration'] if video_info else None,
+                'video_width': video_info['width'] if video_info else None,
+                'video_height': video_info['height'] if video_info else None,
+                'thumbnail_path': thumbnail_path,
+                'file_size': file_size,
                 'created_at': datetime.now().isoformat(),
                 'date': date.today().isoformat(),
                 'admin_id': user_id
@@ -98,7 +240,19 @@ class CouponSend:
             self.database.update_user(user_id, {'waiting_for_coupon': False})
 
             # Confirmer à l'admin
-            await message.reply_text(self.texts['fr']['coupon_added'])
+            confirm_msg = f"✅ **Coupon créé avec succès!**\n\n"
+            if media_type == "photo":
+                confirm_msg += f"🖼️ **Type:** Image\n📏 **Taille:** {file_size/1024:.0f} KB"
+            elif media_type == "video":
+                confirm_msg += f"🎥 **Type:** Vidéo\n"
+                confirm_msg += f"📏 **Taille:** {file_size/1024/1024:.1f} MB\n"
+                if video_info:
+                    confirm_msg += f"⏱️ **Durée:** {video_info['duration']}s\n"
+                    confirm_msg += f"📐 **Résolution:** {video_info['width']}x{video_info['height']}"
+            else:
+                confirm_msg += f"📝 **Type:** Texte"
+
+            await message.reply_text(confirm_msg, parse_mode="Markdown")
 
             # Obtenir le nombre d'utilisateurs pour estimation
             user_count = self.database.get_user_count()
@@ -130,11 +284,11 @@ class CouponSend:
         except Exception as e:
             logger.error(f"Erreur lors de la création du coupon: {e}")
             await message.reply_text(
-                f"❌ Erreur lors de la création du coupon: {str(e)}"
+                f"❌ **Erreur lors de la création du coupon:**\n{str(e)}"
             )
 
     async def _send_coupon_to_user(self, context, user_id, coupon_data, caption):
-        """Envoyer un coupon à un utilisateur spécifique avec gestion d'erreur"""
+        """Envoyer un coupon à un utilisateur spécifique avec gestion d'erreur améliorée"""
         try:
             user_id_int = int(user_id)
             
@@ -153,13 +307,34 @@ class CouponSend:
                         parse_mode="Markdown"
                     )
             elif media_type == "video" and coupon_data.get('video_path') and os.path.exists(coupon_data['video_path']):
-                with open(coupon_data['video_path'], 'rb') as video_file:
-                    await context.bot.send_video(
-                        chat_id=user_id_int,
-                        video=video_file,
-                        caption=caption,
-                        parse_mode="Markdown"
-                    )
+                # Paramètres pour l'envoi de vidéo
+                video_kwargs = {
+                    'chat_id': user_id_int,
+                    'caption': caption,
+                    'parse_mode': "Markdown"
+                }
+                
+                # Ajouter les métadonnées si disponibles
+                if coupon_data.get('video_duration'):
+                    video_kwargs['duration'] = coupon_data['video_duration']
+                if coupon_data.get('video_width'):
+                    video_kwargs['width'] = coupon_data['video_width']
+                if coupon_data.get('video_height'):
+                    video_kwargs['height'] = coupon_data['video_height']
+                
+                # Ajouter la miniature si disponible
+                if coupon_data.get('thumbnail_path') and os.path.exists(coupon_data['thumbnail_path']):
+                    with open(coupon_data['thumbnail_path'], 'rb') as thumb_file:
+                        video_kwargs['thumbnail'] = thumb_file
+                        
+                        with open(coupon_data['video_path'], 'rb') as video_file:
+                            video_kwargs['video'] = video_file
+                            await context.bot.send_video(**video_kwargs)
+                else:
+                    # Envoyer sans miniature
+                    with open(coupon_data['video_path'], 'rb') as video_file:
+                        video_kwargs['video'] = video_file
+                        await context.bot.send_video(**video_kwargs)
             else:
                 # Texte simple ou fichier média introuvable
                 await context.bot.send_message(
@@ -175,7 +350,13 @@ class CouponSend:
             return {'status': 'blocked', 'error': 'User blocked the bot'}
         except BadRequest as e:
             # Chat non trouvé ou autre erreur BadRequest
-            return {'status': 'bad_request', 'error': str(e)}
+            error_msg = str(e).lower()
+            if 'file too big' in error_msg or 'request entity too large' in error_msg:
+                return {'status': 'file_too_large', 'error': 'File exceeds size limit'}
+            elif 'unsupported file format' in error_msg:
+                return {'status': 'unsupported_format', 'error': 'Unsupported file format'}
+            else:
+                return {'status': 'bad_request', 'error': str(e)}
         except TelegramError as e:
             # Autres erreurs Telegram
             return {'status': 'telegram_error', 'error': str(e)}
@@ -215,11 +396,13 @@ class CouponSend:
                 f"🕒 {datetime.fromisoformat(coupon_data['created_at']).strftime('%d/%m/%Y à %H:%M')}"
             )
 
-            # Statistiques
+            # Statistiques étendues
             stats = {
                 'success': 0,
                 'blocked': 0,
                 'bad_request': 0,
+                'file_too_large': 0,
+                'unsupported_format': 0,
                 'telegram_error': 0,
                 'error': 0,
                 'skipped': 0
@@ -275,7 +458,7 @@ class CouponSend:
             end_time = datetime.now()
             total_time = (end_time - start_time).total_seconds()
 
-            # Rapport final détaillé
+            # Rapport final détaillé avec nouvelles statistiques
             report = (
                 f"📊 **RAPPORT DE DIFFUSION**\n\n"
                 f"⏰ **Durée totale:** {total_time:.1f} secondes\n"
@@ -283,6 +466,8 @@ class CouponSend:
                 f"✅ **Envoyés avec succès:** {stats['success']}\n"
                 f"🚫 **Utilisateurs ayant bloqué le bot:** {stats['blocked']}\n"
                 f"⚠️ **Erreurs de requête:** {stats['bad_request']}\n"
+                f"📦 **Fichier trop volumineux:** {stats['file_too_large']}\n"
+                f"🎬 **Format non supporté:** {stats['unsupported_format']}\n"
                 f"🌐 **Erreurs Telegram:** {stats['telegram_error']}\n"
                 f"❌ **Autres erreurs:** {stats['error']}\n"
                 f"⏭️ **Ignorés (admin):** {stats['skipped']}\n\n"
@@ -354,7 +539,7 @@ class CouponSend:
             )
             return
 
-        # Envoyer chaque coupon un par un avec gestion d'erreur
+        # Envoyer chaque coupon un par un avec gestion d'erreur améliorée
         for coupon in coupons:
             try:
                 caption = f"📌 {coupon['text']}\n🕒 {coupon['created_at']}"
@@ -368,12 +553,33 @@ class CouponSend:
                             caption=caption
                         )
                 elif media_type == "video" and coupon.get('video_path') and os.path.exists(coupon['video_path']):
-                    with open(coupon['video_path'], 'rb') as video_file:
-                        await context.bot.send_video(
-                            chat_id=user_id,
-                            video=video_file,
-                            caption=caption
-                        )
+                    # Paramètres pour l'envoi de vidéo
+                    video_kwargs = {
+                        'chat_id': user_id,
+                        'caption': caption
+                    }
+                    
+                    # Ajouter les métadonnées si disponibles
+                    if coupon.get('video_duration'):
+                        video_kwargs['duration'] = coupon['video_duration']
+                    if coupon.get('video_width'):
+                        video_kwargs['width'] = coupon['video_width']
+                    if coupon.get('video_height'):
+                        video_kwargs['height'] = coupon['video_height']
+                    
+                    # Ajouter la miniature si disponible
+                    if coupon.get('thumbnail_path') and os.path.exists(coupon['thumbnail_path']):
+                        with open(coupon['thumbnail_path'], 'rb') as thumb_file:
+                            video_kwargs['thumbnail'] = thumb_file
+                            
+                            with open(coupon['video_path'], 'rb') as video_file:
+                                video_kwargs['video'] = video_file
+                                await context.bot.send_video(**video_kwargs)
+                    else:
+                        # Envoyer sans miniature
+                        with open(coupon['video_path'], 'rb') as video_file:
+                            video_kwargs['video'] = video_file
+                            await context.bot.send_video(**video_kwargs)
                 else:
                     await context.bot.send_message(
                         chat_id=user_id,
@@ -421,11 +627,100 @@ class CouponSend:
             f"📦 **Taille des batches:** {self.batch_size}\n"
             f"⏱️ **Délai entre batches:** {self.batch_delay}s\n"
             f"🚀 **Vitesse estimée:** {self.batch_size/self.batch_delay:.1f} utilisateurs/seconde\n"
-            f"⌛ **Temps estimé pour diffusion complète:** {estimated_time:.0f} secondes ({estimated_time/60:.1f} minutes)"
+            f"⌛ **Temps estimé pour diffusion complète:** {estimated_time:.0f} secondes ({estimated_time/60:.1f} minutes)\n\n"
+            f"📁 **Limites de fichiers:**\n"
+            f"🖼️ Images: {self.MAX_PHOTO_SIZE/1024/1024:.0f} MB max\n"
+            f"🎥 Vidéos: {self.MAX_VIDEO_SIZE/1024/1024:.0f} MB max"
         )
 
         await update.callback_query.message.reply_text(
             stats_message,
             parse_mode="Markdown"
         )
+        await update.callback_query.answer()
+
+    def cleanup_old_media(self, days_old=7):
+        """Nettoyer les anciens fichiers média pour libérer l'espace disque"""
+        try:
+            import time
+            from pathlib import Path
+            
+            current_time = time.time()
+            deleted_count = 0
+            freed_space = 0
+            
+            for file_path in Path(self.media_path).rglob("*"):
+                if file_path.is_file():
+                    # Calculer l'âge du fichier
+                    file_age = (current_time - file_path.stat().st_mtime) / 86400  # en jours
+                    
+                    if file_age > days_old:
+                        file_size = file_path.stat().st_size
+                        try:
+                            file_path.unlink()  # Supprimer le fichier
+                            deleted_count += 1
+                            freed_space += file_size
+                            logger.info(f"Fichier supprimé: {file_path}")
+                        except Exception as e:
+                            logger.error(f"Erreur lors de la suppression de {file_path}: {e}")
+            
+            logger.info(f"Nettoyage terminé: {deleted_count} fichiers supprimés, {freed_space/1024/1024:.1f} MB libérés")
+            return deleted_count, freed_space
+            
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des médias: {e}")
+            return 0, 0
+
+    async def get_media_storage_info(self, update, context):
+        """Afficher les informations sur l'espace de stockage des médias"""
+        if str(update.effective_user.id) != str(self.config.ADMIN_ID):
+            return
+
+        try:
+            import shutil
+            from pathlib import Path
+            
+            # Calculer l'espace utilisé
+            total_size = 0
+            file_count = 0
+            file_types = {'photo': 0, 'video': 0, 'thumbnail': 0}
+            
+            for file_path in Path(self.media_path).rglob("*"):
+                if file_path.is_file():
+                    total_size += file_path.stat().st_size
+                    file_count += 1
+                    
+                    # Catégoriser les fichiers
+                    if 'photo' in file_path.name:
+                        file_types['photo'] += 1
+                    elif 'video' in file_path.name:
+                        file_types['video'] += 1
+                    elif 'thumb' in file_path.name:
+                        file_types['thumbnail'] += 1
+            
+            # Calculer l'espace libre
+            free_space = shutil.disk_usage(self.media_path).free
+            
+            storage_info = (
+                f"💾 **INFORMATIONS DE STOCKAGE**\n\n"
+                f"📁 **Dossier:** {self.media_path}\n"
+                f"📊 **Espace utilisé:** {total_size/1024/1024:.1f} MB\n"
+                f"💿 **Espace libre:** {free_space/1024/1024/1024:.1f} GB\n"
+                f"📄 **Nombre total de fichiers:** {file_count}\n\n"
+                f"**Répartition par type:**\n"
+                f"🖼️ Images: {file_types['photo']}\n"
+                f"🎥 Vidéos: {file_types['video']}\n"
+                f"🖼️ Miniatures: {file_types['thumbnail']}"
+            )
+            
+            await update.callback_query.message.reply_text(
+                storage_info,
+                parse_mode="Markdown"
+            )
+            
+        except Exception as e:
+            await update.callback_query.message.reply_text(
+                f"❌ Erreur lors de la récupération des informations de stockage: {str(e)}"
+            )
+        
         await update.callback_query.answer()

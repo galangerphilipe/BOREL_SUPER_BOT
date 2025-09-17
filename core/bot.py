@@ -136,11 +136,12 @@ class TelegramBot:
             pattern="^create_coupon$"
         ))
         
-        # Handler pour les coupons (image avec légende)
-        self.application.add_handler(MessageHandler(
-            filters.PHOTO & filters.CAPTION, 
-            self.coupon_system.handle_coupon_submission
-        ))
+        self.application.add_handler(
+            MessageHandler(
+                filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.VIDEO,
+                self.coupon_system.handle_coupon_submission
+            )
+        )
         
     async def start_command(self, update, context):
         """Gestionnaire de la commande /start"""
