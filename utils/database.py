@@ -59,6 +59,15 @@ class Database:
                 current_uses INTEGER DEFAULT 0
             )
         ''')
+
+        # Table de verrouillage du bot
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bot_lock (
+                name TEXT PRIMARY KEY,
+                created_at TEXT
+            )
+        ''')
+
         
         # Vérifier si la table existe déjà et ajouter les nouvelles colonnes si nécessaire
         cursor.execute("PRAGMA table_info(coupons)")
@@ -89,6 +98,30 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row  # Pour obtenir des résultats sous forme de dict
         return conn
+    
+    def acquire_lock(self, lock_name="telegram_bot_lock"):
+        """Tenter d'acquérir un verrou (retourne True si succès, False sinon)"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('INSERT INTO bot_lock (name, created_at) VALUES (?, ?)', 
+                           (lock_name, datetime.now().isoformat()))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            # Le verrou existe déjà (une autre instance tourne)
+            return False
+        finally:
+            conn.close()
+
+    def release_lock(self, lock_name="telegram_bot_lock"):
+        """Libérer le verrou"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM bot_lock WHERE name = ?', (lock_name,))
+        conn.commit()
+        conn.close()
+
     
     def get_user(self, user_id):
         """Obtenir les données d'un utilisateur"""

@@ -8,6 +8,8 @@ from utils.database import Database
 from config.settings import Config
 from core.couponSend import CouponSend
 import logging
+import signal
+import sys
 
 class TelegramBot:
     def __init__(self):
@@ -22,8 +24,17 @@ class TelegramBot:
         self.coupon_system = CouponSend(self.config, self.database)
         
         self._setup_handlers()
+        self._setup_shutdown_handler()
 
+    def _setup_shutdown_handler(self):
+        """Configure le gestionnaire d'arrêt propre"""
+        def signal_handler(sig, frame):
+            logging.info("Signal d'arrêt reçu, arrêt du bot...")
+            self.stop()
+            sys.exit(0)
         
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
         
     def _setup_handlers(self):
         """Configure tous les handlers du bot"""
@@ -89,7 +100,6 @@ class TelegramBot:
             pattern="^play_kamikaze$"
         ))
 
-
         self.application.add_handler(CallbackQueryHandler(
             self.game_manager.handle_play_thimbles,
             pattern="^play_thimbles$"
@@ -129,6 +139,7 @@ class TelegramBot:
             self.question_system.cancel_question, 
             pattern="^cancel_question$"
         ))
+
 
         # Handler pour la création de coupon
         self.application.add_handler(CallbackQueryHandler(
@@ -173,15 +184,32 @@ class TelegramBot:
             
         await self.navigation.handle_menu_selection(update, context, text)
         
-    async def start(self):
+    def start(self):
         """Démarrer le bot"""
-        logging.info("🚀 Bot démarré...")
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.bot.delete_webhook(drop_pending_updates=True)
-        await self.application.run_polling()
+        try:
+            logging.info("🚀 Démarrage du bot...")
+            
+            # Supprimer le webhook et les mises à jour en attente
+            logging.info("🔄 Suppression du webhook...")
+            self.application.bot.delete_webhook(drop_pending_updates=True)
+            
+            logging.info("✅ Bot démarré avec succès - Mode polling")
+            self.application.run_polling(
+                allowed_updates=["message", "callback_query", "inline_query"],
+                drop_pending_updates=True
+            )
+            
+        except Exception as e:
+            logging.error(f"❌ Erreur lors du démarrage du bot: {e}")
+            raise e
     
-    async def stop(self):
+    def stop(self):
         """Arrêter le bot proprement"""
-        logging.info("🛑 Arrêt du bot...")
-        await self.application.stop()
+        try:
+            logging.info("🛑 Arrêt du bot en cours...")
+            if self.application:
+                self.application.stop()
+                logging.info("✅ Bot arrêté avec succès")
+        except Exception as e:
+            logging.error(f"❌ Erreur lors de l'arrêt du bot: {e}")
+            raise e
