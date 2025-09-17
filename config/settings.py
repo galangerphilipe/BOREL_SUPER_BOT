@@ -5,7 +5,7 @@ load_dotenv()
 
 class Config:
     # Bot configuration
-    BOT_TOKEN = os.getenv("TOKEN")
+    BOT_TOKEN = os.environ.get("TOKEN")
     
     # Group verification
     TELEGRAM_GROUP = "https://t.me/+2_-i4vuiQZc0OTRk"
