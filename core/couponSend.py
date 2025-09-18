@@ -4,8 +4,6 @@ from telegram.error import TelegramError, Forbidden, BadRequest
 import os
 import asyncio
 import logging
-from PIL import Image
-import cv2
 
 logger = logging.getLogger(__name__)
 
@@ -34,62 +32,6 @@ class CouponSend:
         # Cette fonction doit charger tes textes multilingues (à adapter si besoin)
         from utils.helpers import load_texts
         return load_texts()
-
-    def _get_video_info(self, video_path):
-        """Extraire les informations d'une vidéo (durée, dimensions)"""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                return None
-            
-            # Obtenir les propriétés de la vidéo
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            duration = int(frame_count / fps) if fps > 0 else 0
-            
-            cap.release()
-            
-            return {
-                'duration': duration,
-                'width': width,
-                'height': height
-            }
-        except Exception as e:
-            logger.error(f"Erreur lors de l'extraction des infos vidéo: {e}")
-            return None
-
-    def _generate_video_thumbnail(self, video_path):
-        """Générer une miniature pour la vidéo"""
-        try:
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                return None
-            
-            # Lire la première frame
-            ret, frame = cap.read()
-            cap.release()
-            
-            if not ret:
-                return None
-            
-            # Convertir BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Créer une miniature
-            thumbnail = Image.fromarray(frame_rgb)
-            thumbnail.thumbnail((320, 240), Image.Resampling.LANCZOS)
-            
-            # Sauvegarder la miniature
-            thumbnail_path = video_path.replace('.mp4', '_thumb.jpg')
-            thumbnail.save(thumbnail_path, 'JPEG', quality=80)
-            
-            return thumbnail_path
-        except Exception as e:
-            logger.error(f"Erreur lors de la génération de miniature: {e}")
-            return None
 
     async def start_coupon_creation(self, update, context):
         """Lancer la création de coupon par l'admin"""
@@ -178,9 +120,6 @@ class CouponSend:
 
         try:
             # Télécharger le fichier média si c'est une image ou vidéo
-            video_info = None
-            thumbnail_path = None
-            
             if media_type in ["photo", "video"]:
                 tg_file: File = await context.bot.get_file(file_id)
                 
@@ -210,14 +149,11 @@ class CouponSend:
                         await progress_msg.delete()
                     except:
                         pass
-                
-                # Pour les vidéos, extraire les informations et générer une miniature
-                if media_type == "video":
-                    video_info = self._get_video_info(file_path)
-                    thumbnail_path = self._generate_video_thumbnail(file_path)
-                    
-                    if not video_info:
-                        logger.warning(f"Impossible d'extraire les infos de la vidéo: {file_path}")
+
+            # Valeurs par défaut pour les vidéos (sans traitement CV2)
+            video_duration = 30 if media_type == "video" else None  # Valeur par défaut
+            video_width = 1280 if media_type == "video" else None   # Valeur par défaut
+            video_height = 720 if media_type == "video" else None  # Valeur par défaut
 
             coupon_data = {
                 'coupon_id': f"coupon_{datetime.now().isoformat()}",
@@ -225,10 +161,10 @@ class CouponSend:
                 'media_type': media_type,
                 'photo_path': file_path if media_type == "photo" else None,
                 'video_path': file_path if media_type == "video" else None,
-                'video_duration': video_info['duration'] if video_info else None,
-                'video_width': video_info['width'] if video_info else None,
-                'video_height': video_info['height'] if video_info else None,
-                'thumbnail_path': thumbnail_path,
+                'video_duration': video_duration,
+                'video_width': video_width,
+                'video_height': video_height,
+                'thumbnail_path': None,  # Plus de miniatures générées
                 'file_size': file_size,
                 'created_at': datetime.now().isoformat(),
                 'date': date.today().isoformat(),
@@ -246,9 +182,8 @@ class CouponSend:
             elif media_type == "video":
                 confirm_msg += f"🎥 **Type:** Vidéo\n"
                 confirm_msg += f"📏 **Taille:** {file_size/1024/1024:.1f} MB\n"
-                if video_info:
-                    confirm_msg += f"⏱️ **Durée:** {video_info['duration']}s\n"
-                    confirm_msg += f"📐 **Résolution:** {video_info['width']}x{video_info['height']}"
+                confirm_msg += f"⏱️ **Durée:** {video_duration}s (défaut)\n"
+                confirm_msg += f"📐 **Résolution:** {video_width}x{video_height} (défaut)"
             else:
                 confirm_msg += f"📝 **Type:** Texte"
 
@@ -314,7 +249,7 @@ class CouponSend:
                     'parse_mode': "Markdown"
                 }
                 
-                # Ajouter les métadonnées si disponibles
+                # Ajouter les métadonnées par défaut
                 if coupon_data.get('video_duration'):
                     video_kwargs['duration'] = coupon_data['video_duration']
                 if coupon_data.get('video_width'):
@@ -322,19 +257,10 @@ class CouponSend:
                 if coupon_data.get('video_height'):
                     video_kwargs['height'] = coupon_data['video_height']
                 
-                # Ajouter la miniature si disponible
-                if coupon_data.get('thumbnail_path') and os.path.exists(coupon_data['thumbnail_path']):
-                    with open(coupon_data['thumbnail_path'], 'rb') as thumb_file:
-                        video_kwargs['thumbnail'] = thumb_file
-                        
-                        with open(coupon_data['video_path'], 'rb') as video_file:
-                            video_kwargs['video'] = video_file
-                            await context.bot.send_video(**video_kwargs)
-                else:
-                    # Envoyer sans miniature
-                    with open(coupon_data['video_path'], 'rb') as video_file:
-                        video_kwargs['video'] = video_file
-                        await context.bot.send_video(**video_kwargs)
+                # Envoyer la vidéo sans miniature
+                with open(coupon_data['video_path'], 'rb') as video_file:
+                    video_kwargs['video'] = video_file
+                    await context.bot.send_video(**video_kwargs)
             else:
                 # Texte simple ou fichier média introuvable
                 await context.bot.send_message(
@@ -567,19 +493,10 @@ class CouponSend:
                     if coupon.get('video_height'):
                         video_kwargs['height'] = coupon['video_height']
                     
-                    # Ajouter la miniature si disponible
-                    if coupon.get('thumbnail_path') and os.path.exists(coupon['thumbnail_path']):
-                        with open(coupon['thumbnail_path'], 'rb') as thumb_file:
-                            video_kwargs['thumbnail'] = thumb_file
-                            
-                            with open(coupon['video_path'], 'rb') as video_file:
-                                video_kwargs['video'] = video_file
-                                await context.bot.send_video(**video_kwargs)
-                    else:
-                        # Envoyer sans miniature
-                        with open(coupon['video_path'], 'rb') as video_file:
-                            video_kwargs['video'] = video_file
-                            await context.bot.send_video(**video_kwargs)
+                    # Envoyer la vidéo sans miniature
+                    with open(coupon['video_path'], 'rb') as video_file:
+                        video_kwargs['video'] = video_file
+                        await context.bot.send_video(**video_kwargs)
                 else:
                     await context.bot.send_message(
                         chat_id=user_id,
@@ -683,7 +600,7 @@ class CouponSend:
             # Calculer l'espace utilisé
             total_size = 0
             file_count = 0
-            file_types = {'photo': 0, 'video': 0, 'thumbnail': 0}
+            file_types = {'photo': 0, 'video': 0}
             
             for file_path in Path(self.media_path).rglob("*"):
                 if file_path.is_file():
@@ -695,8 +612,6 @@ class CouponSend:
                         file_types['photo'] += 1
                     elif 'video' in file_path.name:
                         file_types['video'] += 1
-                    elif 'thumb' in file_path.name:
-                        file_types['thumbnail'] += 1
             
             # Calculer l'espace libre
             free_space = shutil.disk_usage(self.media_path).free
@@ -709,8 +624,7 @@ class CouponSend:
                 f"📄 **Nombre total de fichiers:** {file_count}\n\n"
                 f"**Répartition par type:**\n"
                 f"🖼️ Images: {file_types['photo']}\n"
-                f"🎥 Vidéos: {file_types['video']}\n"
-                f"🖼️ Miniatures: {file_types['thumbnail']}"
+                f"🎥 Vidéos: {file_types['video']}"
             )
             
             await update.callback_query.message.reply_text(
