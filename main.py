@@ -17,13 +17,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# Importer keep_alive seulement si nécessaire
-try:
-    from keep_alive import keep_alive
-    keep_alive()
-    logger.info("✅ Keep-alive activé")
-except ImportError:
-    logger.warning("⚠️ Keep-alive non disponible")
 
 if __name__ == "__main__":
     config = Config()
