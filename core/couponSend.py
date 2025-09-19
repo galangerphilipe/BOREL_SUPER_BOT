@@ -427,6 +427,7 @@ class CouponSend:
 
         today = date.today().isoformat()
         coupons = self.database.get_daily_coupons(today)
+        coupons = list(reversed(coupons))
 
         # Cas : aucun coupon pour un utilisateur normal
         if not coupons and str(user_id) != str(self.config.ADMIN_ID):
